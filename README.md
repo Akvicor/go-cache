@@ -5,6 +5,8 @@ Rewrite https://github.com/patrickmn/go-cache
 Usage is similar to go-cache
 
 ```go
+import "github.com/Akvicor/go-cache"
+
 // New Any
 New[string, any](5*time.Minute, 0)
 NewAny[string, any](5*time.Minute, 0)
