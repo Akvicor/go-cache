@@ -473,3 +473,79 @@ func BenchmarkIncrementInt(b *testing.B) {
 		tc.Increment("foo", 1)
 	}
 }
+
+func TestSetMax(t *testing.T) {
+	tc := NewNumber[string, int64](DefaultExpiration, 0)
+	err := tc.SetMax("int64", 12, DefaultExpiration)
+	if err != nil {
+		t.Error("Error set max int64:", err)
+	}
+	t.Log(tc.Get("int64"))
+	err = tc.SetMax("int64", 14, DefaultExpiration)
+	if err != nil {
+		t.Error("Error set max int64:", err)
+	}
+	t.Log(tc.Get("int64"))
+	err = tc.SetMax("int64", 13, DefaultExpiration)
+	if err != nil {
+		t.Error("Error set max int64:", err)
+	}
+	t.Log(tc.Get("int64"))
+}
+
+func TestSetMin(t *testing.T) {
+	tc := NewNumber[string, int64](DefaultExpiration, 0)
+	err := tc.SetMin("int64", 12, DefaultExpiration)
+	if err != nil {
+		t.Error("Error set min int64:", err)
+	}
+	t.Log(tc.Get("int64"))
+	err = tc.SetMin("int64", 14, DefaultExpiration)
+	if err != nil {
+		t.Error("Error set min int64:", err)
+	}
+	t.Log(tc.Get("int64"))
+	err = tc.SetMin("int64", 11, DefaultExpiration)
+	if err != nil {
+		t.Error("Error set min int64:", err)
+	}
+	t.Log(tc.Get("int64"))
+}
+
+func TestUpdateMax(t *testing.T) {
+	tc := NewNumber[string, int64](DefaultExpiration, 0)
+	err := tc.UpdateMax("int64", 12)
+	if err == nil {
+		t.Error("No Error update max int64:", err)
+	}
+	t.Log(tc.Get("int64"))
+	err = tc.SetMax("int64", 14, DefaultExpiration)
+	if err != nil {
+		t.Error("Error set max int64:", err)
+	}
+	t.Log(tc.Get("int64"))
+	err = tc.UpdateMax("int64", 17)
+	if err != nil {
+		t.Error("Error update max int64:", err)
+	}
+	t.Log(tc.Get("int64"))
+}
+
+func TestUpdateMin(t *testing.T) {
+	tc := NewNumber[string, int64](DefaultExpiration, 0)
+	err := tc.UpdateMin("int64", 12)
+	if err == nil {
+		t.Error("No Error update min int64:", err)
+	}
+	t.Log(tc.Get("int64"))
+	err = tc.SetMin("int64", 14, DefaultExpiration)
+	if err != nil {
+		t.Error("Error set min int64:", err)
+	}
+	t.Log(tc.Get("int64"))
+	err = tc.UpdateMin("int64", 11)
+	if err != nil {
+		t.Error("Error update min int64:", err)
+	}
+	t.Log(tc.Get("int64"))
+}

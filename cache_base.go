@@ -98,6 +98,29 @@ func (c *cache[K, V]) get(k K) (V, bool) {
 	return item.Value, true
 }
 
+// UpdateExpiration. If the duration is 0
+// (DefaultExpiration), the cache's default expiration time is used. If it is -1
+// (NoExpiration), the item never expires.
+func (c *cache[K, V]) UpdateExpiration(k K, d time.Duration) error {
+	var e int64
+	if d == DefaultExpiration {
+		d = c.defaultExpiration
+	}
+	if d > 0 {
+		e = time.Now().Add(d).UnixNano()
+	}
+	c.mu.Lock()
+	v, found := c.items[k]
+	if !found || v.Expired() {
+		c.mu.Unlock()
+		return fmt.Errorf("Item %v not found", k)
+	}
+	v.Expiration = e
+	c.items[k] = v
+	c.mu.Unlock()
+	return nil
+}
+
 // Add an item to the cache only if an item doesn't already exist for the given
 // key, or if the existing item has expired. Returns an error otherwise.
 func (c *cache[K, V]) Add(k K, v V, d time.Duration) error {
