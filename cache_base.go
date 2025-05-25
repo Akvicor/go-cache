@@ -262,6 +262,23 @@ func (c *cache[K, V]) DeleteExpired() {
 	}
 }
 
+// DeleteAll delete all
+func (c *cache[K, V]) DeleteAll() {
+	var evictedItems []keyAndValueModel[K, V]
+	c.mu.Lock()
+	for k, _ := range c.items {
+		// "Inlining" of expired
+		ov, oh, evicted := c.delete(k)
+		if evicted {
+			evictedItems = append(evictedItems, keyAndValueModel[K, V]{k, ov, oh})
+		}
+	}
+	c.mu.Unlock()
+	for _, v := range evictedItems {
+		c.onEvicted(v.key, v.value, v.hit)
+	}
+}
+
 func (c *cache[K, V]) delete(k K) (V, int, bool) {
 	if c.onEvicted != nil {
 		if v, found := c.items[k]; found {
