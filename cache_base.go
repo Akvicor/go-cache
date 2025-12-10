@@ -394,6 +394,22 @@ func (c *cache[K, V]) Delete(k K) {
 	}
 }
 
+// DeleteBySlice an item from the cache. Does nothing if the key is not in the cache.
+func (c *cache[K, V]) DeleteBySlice(ks []K) {
+	var evictedItems []keyAndValueModel[K, V]
+	c.mu.Lock()
+	for _, k := range ks {
+		v, hit, evicted := c.delete(k)
+		if evicted {
+			evictedItems = append(evictedItems, keyAndValueModel[K, V]{k, v, hit})
+		}
+	}
+	c.mu.Unlock()
+	for _, v := range evictedItems {
+		c.onEvicted(v.key, v.value, v.hit)
+	}
+}
+
 // Save Write the cache's items (using Gob) to an io.Writer.
 //
 // NOTE: This method is deprecated in favor of c.Items() and NewFrom() (see the
