@@ -63,6 +63,51 @@ func (c *cache[K, V]) Set(k K, v V, d time.Duration) {
 	}
 }
 
+// SetsBySlice Add items to the cache, replacing any existing item. If the duration is 0
+// (DefaultExpiration), the cache's default expiration time is used. If it is -1
+// (NoExpiration), the item never expires.
+func (c *cache[K, V]) SetsBySlice(data []V, d time.Duration, handle func(V) (k K, v V)) {
+	var e int64
+	if d == DefaultExpiration {
+		d = c.defaultExpiration
+	}
+	if d > 0 {
+		e = time.Now().Add(d).UnixNano()
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, item := range data {
+		k, v := handle(item)
+		c.items[k] = Item[V]{
+			Value:      v,
+			Expiration: e,
+			Hit:        0,
+		}
+	}
+}
+
+// SetsByMap Add items to the cache, replacing any existing item. If the duration is 0
+// (DefaultExpiration), the cache's default expiration time is used. If it is -1
+// (NoExpiration), the item never expires.
+func (c *cache[K, V]) SetsByMap(data map[K]V, d time.Duration) {
+	var e int64
+	if d == DefaultExpiration {
+		d = c.defaultExpiration
+	}
+	if d > 0 {
+		e = time.Now().Add(d).UnixNano()
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for k, v := range data {
+		c.items[k] = Item[V]{
+			Value:      v,
+			Expiration: e,
+			Hit:        0,
+		}
+	}
+}
+
 // SetDefault Add an item to the cache, replacing any existing item, using the default expiration.
 func (c *cache[K, V]) SetDefault(k K, v V) {
 	c.Set(k, v, DefaultExpiration)
@@ -168,6 +213,54 @@ func (c *cache[K, V]) Get(k K) (V, bool) {
 	}
 	c.mu.RUnlock()
 	return item.Value, true
+}
+
+// GetsBySlice items from the cache. Returns the item or nil, and a bool indicating
+// whether the key was found.
+func (c *cache[K, V]) GetsBySlice(ks []K) ([]V, bool) {
+	v := make([]V, 0, len(ks))
+	c.mu.RLock()
+	for _, k := range ks {
+		item, found := c.items[k]
+		if !found {
+			continue
+		}
+		if item.Expiration > 0 {
+			if time.Now().UnixNano() > item.Expiration {
+				continue
+			}
+		}
+		v = append(v, item.Value)
+	}
+	c.mu.RUnlock()
+	if len(v) == 0 {
+		return v, false
+	}
+	return v, true
+}
+
+// GetsByMap items from the cache. Returns the item or nil, and a bool indicating
+// whether the key was found.
+func (c *cache[K, V]) GetsByMap(in map[K]V) (map[K]V, bool) {
+	result := make(map[K]V)
+	c.mu.RLock()
+	for k := range in {
+		item, found := c.items[k]
+		if !found {
+			continue
+		}
+		if item.Expiration > 0 {
+			if time.Now().UnixNano() > item.Expiration {
+				continue
+			}
+		}
+		result[k] = item.Value
+	}
+	c.mu.RUnlock()
+	if len(result) == 0 {
+		return result, false
+	}
+	return result, true
 }
 
 // GetWithExpiration returns an item and its expiration time from the cache.
