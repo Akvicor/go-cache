@@ -2,6 +2,7 @@ package cache
 
 import (
 	"bytes"
+	"errors"
 	"io/ioutil"
 	"runtime"
 	"strconv"
@@ -177,6 +178,321 @@ func TestReplace(t *testing.T) {
 	if err != nil {
 		t.Error("Couldn't replace existing key foo")
 	}
+}
+
+func TestSetIfNotExisting(t *testing.T) {
+	tc := New[string, int](DefaultExpiration, 0)
+	got, err := tc.SetIf("foo", func(exist bool, oldValue int) (int, error) {
+		if exist {
+			t.Fatal("foo existed when it should not")
+		}
+		if oldValue != 0 {
+			t.Fatalf("oldValue is not zero: %d", oldValue)
+		}
+		return 12, nil
+	}, DefaultExpiration)
+	if err != nil {
+		t.Fatal("Couldn't set missing foo:", err)
+	}
+	if got != 12 {
+		t.Fatalf("SetIf returned %d, want 12", got)
+	}
+	x, found := tc.Get("foo")
+	if !found {
+		t.Fatal("foo was not found")
+	}
+	if x != 12 {
+		t.Fatalf("foo is %d, want 12", x)
+	}
+}
+
+func TestSetIfExisting(t *testing.T) {
+	tc := New[string, int](DefaultExpiration, 0)
+	tc.Set("foo", 12, DefaultExpiration)
+	got, err := tc.SetIf("foo", func(exist bool, oldValue int) (int, error) {
+		if !exist {
+			t.Fatal("foo did not exist")
+		}
+		if oldValue != 12 {
+			t.Fatalf("oldValue is %d, want 12", oldValue)
+		}
+		return oldValue + 2, nil
+	}, DefaultExpiration)
+	if err != nil {
+		t.Fatal("Couldn't update existing foo:", err)
+	}
+	if got != 14 {
+		t.Fatalf("SetIf returned %d, want 14", got)
+	}
+	x, found := tc.Get("foo")
+	if !found {
+		t.Fatal("foo was not found")
+	}
+	if x != 14 {
+		t.Fatalf("foo is %d, want 14", x)
+	}
+}
+
+func TestSetIfExpired(t *testing.T) {
+	tc := New[string, int](DefaultExpiration, 0)
+	tc.Set("foo", 12, 1*time.Millisecond)
+	<-time.After(5 * time.Millisecond)
+	got, err := tc.SetIf("foo", func(exist bool, oldValue int) (int, error) {
+		if exist {
+			t.Fatal("expired foo existed")
+		}
+		if oldValue != 0 {
+			t.Fatalf("oldValue is not zero: %d", oldValue)
+		}
+		return 14, nil
+	}, DefaultExpiration)
+	if err != nil {
+		t.Fatal("Couldn't set expired foo:", err)
+	}
+	if got != 14 {
+		t.Fatalf("SetIf returned %d, want 14", got)
+	}
+	x, found := tc.Get("foo")
+	if !found {
+		t.Fatal("foo was not found")
+	}
+	if x != 14 {
+		t.Fatalf("foo is %d, want 14", x)
+	}
+}
+
+func TestSetIfErrorExisting(t *testing.T) {
+	tc := New[string, int](DefaultExpiration, 0)
+	tc.Set("foo", 12, DefaultExpiration)
+	setErr := errors.New("set failed")
+	got, err := tc.SetIf("foo", func(exist bool, oldValue int) (int, error) {
+		if !exist {
+			t.Fatal("foo did not exist")
+		}
+		return oldValue + 2, setErr
+	}, DefaultExpiration)
+	if !errors.Is(err, setErr) {
+		t.Fatalf("SetIf error is %v, want %v", err, setErr)
+	}
+	if got != 12 {
+		t.Fatalf("SetIf returned %d, want old value 12", got)
+	}
+	x, found := tc.Get("foo")
+	if !found {
+		t.Fatal("foo was not found")
+	}
+	if x != 12 {
+		t.Fatalf("foo is %d, want 12", x)
+	}
+}
+
+func TestSetIfErrorMissing(t *testing.T) {
+	tc := New[string, int](DefaultExpiration, 0)
+	setErr := errors.New("set failed")
+	got, err := tc.SetIf("foo", func(exist bool, oldValue int) (int, error) {
+		if exist {
+			t.Fatal("foo existed when it should not")
+		}
+		return 12, setErr
+	}, DefaultExpiration)
+	if !errors.Is(err, setErr) {
+		t.Fatalf("SetIf error is %v, want %v", err, setErr)
+	}
+	if got != 0 {
+		t.Fatalf("SetIf returned %d, want zero value", got)
+	}
+	if x, found := tc.Get("foo"); found || x != 0 {
+		t.Fatalf("foo was stored after error: %d, %v", x, found)
+	}
+}
+
+func TestSetIfExpiration(t *testing.T) {
+	tc := New[string, int](10*time.Millisecond, 0)
+	_, err := tc.SetIf("foo", func(exist bool, oldValue int) (int, error) {
+		return 12, nil
+	}, DefaultExpiration)
+	if err != nil {
+		t.Fatal("Couldn't set foo:", err)
+	}
+	<-time.After(20 * time.Millisecond)
+	if x, found := tc.Get("foo"); found || x != 0 {
+		t.Fatalf("foo did not expire: %d, %v", x, found)
+	}
+
+	_, err = tc.SetIf("bar", func(exist bool, oldValue int) (int, error) {
+		return 14, nil
+	}, NoExpiration)
+	if err != nil {
+		t.Fatal("Couldn't set bar:", err)
+	}
+	<-time.After(20 * time.Millisecond)
+	x, found := tc.Get("bar")
+	if !found {
+		t.Fatal("bar was not found")
+	}
+	if x != 14 {
+		t.Fatalf("bar is %d, want 14", x)
+	}
+}
+
+func TestSetsBySlice(t *testing.T) {
+	tc := New[string, int](DefaultExpiration, 0)
+	tc.Set("old", 1, DefaultExpiration)
+
+	done := make(chan struct{})
+	go func() {
+		tc.SetsBySlice([]int{2, 3}, DefaultExpiration, func(v int) (string, int) {
+			if x, found := tc.Get("old"); !found || x != 1 {
+				t.Errorf("old is %d, %v; want 1, true", x, found)
+			}
+			return strconv.Itoa(v), v * 10
+		})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("SetsBySlice deadlocked while handle accessed the cache")
+	}
+
+	x, found := tc.Get("2")
+	if !found {
+		t.Fatal("2 was not found")
+	}
+	if x != 20 {
+		t.Fatalf("2 is %d, want 20", x)
+	}
+	x, found = tc.Get("3")
+	if !found {
+		t.Fatal("3 was not found")
+	}
+	if x != 30 {
+		t.Fatalf("3 is %d, want 30", x)
+	}
+}
+
+func TestSetsByMap(t *testing.T) {
+	tc := New[string, int](DefaultExpiration, 0)
+	tc.Set("foo", 1, DefaultExpiration)
+	tc.SetsByMap(map[string]int{
+		"foo": 2,
+		"bar": 3,
+	}, DefaultExpiration)
+
+	x, found := tc.Get("foo")
+	if !found {
+		t.Fatal("foo was not found")
+	}
+	if x != 2 {
+		t.Fatalf("foo is %d, want 2", x)
+	}
+	x, found = tc.Get("bar")
+	if !found {
+		t.Fatal("bar was not found")
+	}
+	if x != 3 {
+		t.Fatalf("bar is %d, want 3", x)
+	}
+}
+
+func TestGetValues(t *testing.T) {
+	tc := New[string, int](DefaultExpiration, 0)
+	tc.Set("a", 1, DefaultExpiration)
+	tc.Set("b", 2, 1*time.Millisecond)
+	tc.Set("c", 3, DefaultExpiration)
+	<-time.After(5 * time.Millisecond)
+
+	values := tc.GetValues([]string{"missing", "a", "b", "c"})
+	if values == nil {
+		t.Fatal("values is nil")
+	}
+	if len(values) != 2 {
+		t.Fatalf("len(values) is %d, want 2", len(values))
+	}
+	if values[0] != 1 || values[1] != 3 {
+		t.Fatalf("values are %v, want [1 3]", values)
+	}
+
+	values = tc.GetValues([]string{"missing", "b"})
+	if values == nil {
+		t.Fatal("empty values is nil")
+	}
+	if len(values) != 0 {
+		t.Fatalf("len(empty values) is %d, want 0", len(values))
+	}
+}
+
+func TestGetValuesMap(t *testing.T) {
+	tc := New[string, int](DefaultExpiration, 0)
+	tc.Set("a", 1, DefaultExpiration)
+	tc.Set("b", 2, 1*time.Millisecond)
+	tc.Set("c", 3, DefaultExpiration)
+	<-time.After(5 * time.Millisecond)
+
+	values := tc.GetValuesMap([]string{"missing", "a", "b", "c"})
+	if values == nil {
+		t.Fatal("values is nil")
+	}
+	if len(values) != 2 {
+		t.Fatalf("len(values) is %d, want 2", len(values))
+	}
+	if values["a"] != 1 {
+		t.Fatalf("a is %d, want 1", values["a"])
+	}
+	if values["c"] != 3 {
+		t.Fatalf("c is %d, want 3", values["c"])
+	}
+	if _, found := values["b"]; found {
+		t.Fatal("expired b was returned")
+	}
+
+	values = tc.GetValuesMap([]string{"missing", "b"})
+	if values == nil {
+		t.Fatal("empty values is nil")
+	}
+	if len(values) != 0 {
+		t.Fatalf("len(empty values) is %d, want 0", len(values))
+	}
+}
+
+func TestDeleteBySlice(t *testing.T) {
+	tc := New[string, int](DefaultExpiration, 0)
+	tc.Set("a", 1, DefaultExpiration)
+	tc.Set("b", 2, DefaultExpiration)
+	tc.Set("c", 3, DefaultExpiration)
+
+	evicted := map[string]int{}
+	tc.OnEvicted(func(k string, v int, hit int) {
+		evicted[k] = v
+		tc.OnEvicted(nil)
+	})
+	tc.DeleteBySlice([]string{"missing", "a", "b"})
+
+	if _, found := tc.Get("a"); found {
+		t.Fatal("a was found")
+	}
+	if _, found := tc.Get("b"); found {
+		t.Fatal("b was found")
+	}
+	x, found := tc.Get("c")
+	if !found {
+		t.Fatal("c was not found")
+	}
+	if x != 3 {
+		t.Fatalf("c is %d, want 3", x)
+	}
+	if len(evicted) != 2 {
+		t.Fatalf("len(evicted) is %d, want 2", len(evicted))
+	}
+	if evicted["a"] != 1 {
+		t.Fatalf("evicted a is %d, want 1", evicted["a"])
+	}
+	if evicted["b"] != 2 {
+		t.Fatalf("evicted b is %d, want 2", evicted["b"])
+	}
+
+	tc.DeleteBySlice([]string{"c"})
 }
 
 func TestDelete(t *testing.T) {

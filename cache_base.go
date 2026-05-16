@@ -67,6 +67,12 @@ func (c *cache[K, V]) Set(k K, v V, d time.Duration) {
 // (DefaultExpiration), the cache's default expiration time is used. If it is -1
 // (NoExpiration), the item never expires.
 func (c *cache[K, V]) SetsBySlice(data []V, d time.Duration, handle func(V) (k K, v V)) {
+	items := make([]keyAndValueModel[K, V], 0, len(data))
+	for _, item := range data {
+		k, v := handle(item)
+		items = append(items, keyAndValueModel[K, V]{key: k, value: v})
+	}
+
 	var e int64
 	if d == DefaultExpiration {
 		d = c.defaultExpiration
@@ -76,10 +82,9 @@ func (c *cache[K, V]) SetsBySlice(data []V, d time.Duration, handle func(V) (k K
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for _, item := range data {
-		k, v := handle(item)
-		c.items[k] = Item[V]{
-			Value:      v,
+	for _, item := range items {
+		c.items[item.key] = Item[V]{
+			Value:      item.value,
 			Expiration: e,
 			Hit:        0,
 		}
@@ -126,6 +131,24 @@ func (c *cache[K, V]) set(k K, v V, d time.Duration) {
 		Expiration: e,
 		Hit:        0,
 	}
+}
+
+// SetIf sets a cache item to the value returned by fn. fn is called while the
+// cache write lock is held, so it must not call methods on the same cache.
+func (c *cache[K, V]) SetIf(k K, fn func(exist bool, oldValue V) (V, error), d time.Duration) (V, error) {
+	var oldValue V
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	existValue, exist := c.get(k)
+	if exist {
+		oldValue = existValue
+	}
+	newValue, err := fn(exist, oldValue)
+	if err != nil {
+		return oldValue, err
+	}
+	c.set(k, newValue, d)
+	return newValue, nil
 }
 
 func (c *cache[K, V]) get(k K) (V, bool) {
@@ -215,11 +238,12 @@ func (c *cache[K, V]) Get(k K) (V, bool) {
 	return item.Value, true
 }
 
-// GetsBySlice items from the cache. Returns the item or nil, and a bool indicating
-// whether the key was found.
-func (c *cache[K, V]) GetsBySlice(ks []K) ([]V, bool) {
+// GetValues returns unexpired items for the given keys. Missing or expired
+// keys are skipped.
+func (c *cache[K, V]) GetValues(ks []K) []V {
 	v := make([]V, 0, len(ks))
 	c.mu.RLock()
+	defer c.mu.RUnlock()
 	for _, k := range ks {
 		item, found := c.items[k]
 		if !found {
@@ -232,19 +256,16 @@ func (c *cache[K, V]) GetsBySlice(ks []K) ([]V, bool) {
 		}
 		v = append(v, item.Value)
 	}
-	c.mu.RUnlock()
-	if len(v) == 0 {
-		return v, false
-	}
-	return v, true
+	return v
 }
 
-// GetsByMap items from the cache. Returns the item or nil, and a bool indicating
-// whether the key was found.
-func (c *cache[K, V]) GetsByMap(in map[K]V) (map[K]V, bool) {
+// GetValuesMap returns unexpired items for the given keys. Missing or expired
+// keys are skipped.
+func (c *cache[K, V]) GetValuesMap(ks []K) map[K]V {
 	result := make(map[K]V)
 	c.mu.RLock()
-	for k := range in {
+	defer c.mu.RUnlock()
+	for _, k := range ks {
 		item, found := c.items[k]
 		if !found {
 			continue
@@ -256,11 +277,7 @@ func (c *cache[K, V]) GetsByMap(in map[K]V) (map[K]V, bool) {
 		}
 		result[k] = item.Value
 	}
-	c.mu.RUnlock()
-	if len(result) == 0 {
-		return result, false
-	}
-	return result, true
+	return result
 }
 
 // GetWithExpiration returns an item and its expiration time from the cache.
@@ -404,9 +421,13 @@ func (c *cache[K, V]) DeleteBySlice(ks []K) {
 			evictedItems = append(evictedItems, keyAndValueModel[K, V]{k, v, hit})
 		}
 	}
+	onEvicted := c.onEvicted
 	c.mu.Unlock()
-	for _, v := range evictedItems {
-		c.onEvicted(v.key, v.value, v.hit)
+	if onEvicted == nil {
+		return
+	}
+	for _, item := range evictedItems {
+		onEvicted(item.key, item.value, item.hit)
 	}
 }
 
